@@ -4,6 +4,7 @@ import abc
 import numpy as np
 from scipy.stats import norm
 from scipy.interpolate import interp1d
+from netCDF4 import Dataset
 
 from konrad.component import Component
 
@@ -251,5 +252,23 @@ class Romps14(RelativeHumidityModel):
                 kind='linear',
                 fill_value='extrapolate',
             )
+
+        return self._rh_func(atmosphere['T'][-1, :])
+
+
+class ERA5RompsStyle(Romps14):
+
+    def __call__(self, atmosphere, **kwargs):
+        if self._rh_func is None:
+            ds = Dataset('tutorials/data/era5_climatology.nc')
+            T_era5_all = ds['temperature'][::-1]
+            T_era5 = T_era5_all[:np.argmin(T_era5_all) - 1]
+            rh_era5 = ds['relative_humidity'][::-1][:np.argmin(T_era5_all) - 1]
+            T_lower = np.arange(269, 320, 1)
+            rh_lower = 0.8 * np.sin(T_lower / 50 + 20.25)
+            T_profile = np.hstack((330, T_lower, T_era5, 160))
+            rh_profile = np.hstack((0.8, rh_lower, rh_era5, rh_era5[-1]))
+            self._rh_func = interp1d(T_profile, rh_profile,
+                                     fill_value='extrapolate')
 
         return self._rh_func(atmosphere['T'][-1, :])
