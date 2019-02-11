@@ -212,6 +212,7 @@ class HardAdjustment(Convection):
             humidity,
             lapse=lapse,
             surface=surface,
+            T_old=T_old,
             timestep=timestep,
         )
         # get convective top temperature and pressure
@@ -239,6 +240,7 @@ class HardAdjustment(Convection):
             lapse (ndarray): critical lapse rate [K/m] defined on pressure
                 half-levels
             surface (konrad.surface):
+<<<<<<< HEAD
                 surface associated with the radiatively adjusted temperature
                 profile
             timestep (float): only required for slow convection [days]
@@ -246,6 +248,11 @@ class HardAdjustment(Convection):
         Returns:
             ndarray: atmospheric temperature profile [K]
             float: surface temperature [K]
+=======
+                surface associated with old temperature profile
+            T_old (ndarray): temperature profile of previous timestep
+                only used in relaxed convection with tau(T)
+            timestep (float): only required for relaxed convection
         """
         p = atmosphere['plev']
         phlev = atmosphere['phlev']
@@ -328,6 +335,7 @@ class HardAdjustment(Convection):
         return T_con, surfaceT
 
     def convective_profile(self, T_rad, p, phlev, surfaceT, lp, **kwargs):
+
         """
         Assuming a particular surface temperature (surfaceT), create a new
         profile, following the specified lapse rate (lp) for the region where
@@ -384,12 +392,13 @@ class HardAdjustment(Convection):
             float: energy difference between the new profile and the radiatively
                 adjusted one
         """
-        T_rad = atmosphere['T'][-1]
         p = atmosphere['plev']
         phlev = atmosphere['phlev']
+        T_rad = atmosphere['T'][-1]
+        T_old = atmosphere_old['T'][-1]
 
         T_con = self.convective_profile(T_rad, p, phlev, surfaceT, lp,
-                                        timestep=timestep)
+                                        timestep=timestep, T_old=T_old)
 
         eff_Cp_s = surface.heat_capacity
 
@@ -481,7 +490,7 @@ class RelaxedAdjustment(HardAdjustment):
         """
         self.convective_tau = tau
 
-    def get_convective_tau(self, p):
+    def get_convective_tau(self, p, **kwargs):
         """Return a convective timescale profile.
 
         Parameters:
@@ -498,7 +507,8 @@ class RelaxedAdjustment(HardAdjustment):
 
         return tau
 
-    def convective_profile(self, T_rad, p, phlev, surfaceT, lp, timestep):
+    def convective_profile(self, T_rad, p, phlev, surfaceT, lp, timestep,
+                           T_old):
         """
         Assuming a particular surface temperature (surfaceT), create a new
         profile, which tries to follow the specified lapse rate (lp). How close
@@ -520,9 +530,40 @@ class RelaxedAdjustment(HardAdjustment):
         # the lapse rate is given on the model half-levels.
         dp_lapse = np.hstack((np.array([p[0] - phlev[0]]), np.diff(p)))
 
-        tau = self.get_convective_tau(p)
+        tau = self.get_convective_tau(p, T_old=T_old)
 
         tf = 1 - np.exp(-timestep / tau)
         T_con = T_rad * (1 - tf) + tf * (surfaceT - np.cumsum(dp_lapse * lp))
 
         return T_con
+
+
+class RelaxedTauT(RelaxedAdjustment):
+    """Adjustment with relaxed convection in upper atmosphere.
+    The convective timescale is kept constant with temperature.
+    """
+    def __init__(self, tau=None):
+        """
+        Parameters:
+            tau (ndarray): Array of convective timescale values [days]
+        """
+        self.convective_tau = tau
+        self.tau_function = None
+
+    def get_convective_tau(self, p, T_old):
+        """Return a convective timescale profile.
+
+        Parameters:
+            p (ndarray): Pressure levels [Pa].
+            T_old (ndarray): Temperature [K]
+
+        Returns:
+            ndarray: Convective timescale profile [days].
+        """
+        if self.convective_tau is None:  # first time only if not specified
+            tau0 = 1 / 24  # 1 hour
+            self.convective_tau = tau0 * np.exp(p[0] / p)
+        if self.tau_function is None:  # first time only
+            self.tau_function = interp1d(T_old, self.convective_tau)
+
+        return self.tau_function(T_old)
